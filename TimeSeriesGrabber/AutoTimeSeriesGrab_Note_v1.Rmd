@@ -1,0 +1,281 @@
+---
+title: "Stock Price Analysis Pipeline"
+output: html_document
+---
+
+Setup in RStudio (tutorial: <https://www.youtube.com/watch?v=TJmNvfhLCoI>):
+
+-- Look at the above menu bar. Choose the little gear on top for **Preview in View Panel**, then click **Knit to HTML** or **Preview**
+
+-- Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+-- The code is executable in the editor panel below with the green arrow.
+
+Libraries
+
+```{r setup, include=FALSE}
+library(quantmod)
+library(dplyr)
+library(fitdistrplus)
+```
+
+------------------------------------------------------------------------
+
+# Functions
+
+## Peak detection
+
+```{r}
+find_peaks <- function(data) {
+  price <- Cl(data)
+  prev  <- lag(price, 1)
+  nexts <- lead(price, 1)
+  peaks <- (price > prev) & (price > nexts)
+  peaks[is.na(peaks)] <- FALSE
+  data[peaks]
+}
+```
+
+## Trough detection
+
+```{r}
+find_troughs <- function(data) {
+  price <- Cl(data)
+  prev  <- lag(price, 1)
+  nexts <- lead(price, 1)
+  trough <- (price < prev) & (price < nexts)
+  trough[is.na(trough)] <- FALSE
+  data[trough]
+}
+```
+
+## Biggest drawdown
+
+```{r}
+biggest_drop <- function(clean_price) {
+  price <- Cl(clean_price)
+  run_peak <- cummax(price)
+  dd <- price - run_peak
+
+  end_i <- which.min(dd)
+  start_i <- which.max(price[1:end_i])
+
+  start <- as.numeric(price[start_i])
+  end   <- as.numeric(price[end_i])
+
+  data.frame(
+    start_date = index(price)[start_i],
+    end_date   = index(price)[end_i],
+    fluct_pct   = (start - end) / start * 100
+  )
+}
+```
+
+## Identify Bull segment
+
+```{r}
+bull_segment <- function(clean_price) {
+    price <- Cl(clean_price)
+  
+  if (is.null(price) || NROW(price) < 2) {
+    return(NULL)
+  }
+  
+  min_i <- which.min(price)
+  
+  # guard: no data after min
+  if (is.na(min_i) || min_i >= NROW(price)) {
+    return(list(
+      min_date = index(price)[min_i],
+      min_price = as.numeric(price[min_i]),
+      peak_after_min_date = NA,
+      peak_after_min_price = NA
+    ))
+  }
+  
+  after_min <- price[(min_i + 1):NROW(price)]
+  
+  # extra safety: empty slice
+  if (NROW(after_min) == 0) {
+    return(list(
+      min_date = index(price)[min_i],
+      min_price = as.numeric(price[min_i]),
+      peak_after_min_date = NA,
+      peak_after_min_price = NA
+    ))
+  }
+  
+  peak_i_rel <- which.max(after_min)
+  
+  # guard: which.max can still fail on weird input
+  if (length(peak_i_rel) == 0 || is.na(peak_i_rel)) {
+    return(list(
+      min_date = index(price)[min_i],
+      min_price = as.numeric(price[min_i]),
+      peak_after_min_date = NA,
+      peak_after_min_price = NA
+    ))
+  }
+  
+  peak_i <- min_i + peak_i_rel
+  
+  list(
+    min_date = index(price)[min_i],
+    min_price = as.numeric(price[min_i]),
+    peak_after_min_date = index(price)[peak_i],
+    peak_after_min_price = as.numeric(price[peak_i])
+  )
+}
+```
+
+## Fluctuation extractor
+
+```{r}
+get_fluctuations <- function(price, min_date, peak_date) {
+  segment <- price[paste(min_date, peak_date, sep = "/")]
+
+  prev <- lag(segment, 1)
+
+  fluct_pct <- (as.numeric(segment) - as.numeric(prev)) / as.numeric(prev) * 100
+  fluct_pct <- fluct_pct[!is.na(fluct_pct)]
+
+  fluct_pct
+}
+```
+
+# Demo
+
+```{r}
+symbol <- "FIG"
+```
+
+## Data loading
+
+```{r}
+thisData <- getSymbols(symbol, from = "2025-04-11", auto.assign = FALSE)
+```
+
+## Peak / Trough extraction
+
+```{r}
+peaks <- find_peaks(thisData)
+troughs <- find_troughs(thisData)
+
+# and a combined of these
+clean_price <- rbind(peaks, troughs)
+clean_price <- clean_price[order(index(clean_price))]
+```
+
+## Visualization
+
+```{r}
+plot(Cl(thisData), main = paste(symbol," Closing Price"), type = "b")
+plot(Cl(clean_price), main = paste(symbol," Clean Closing Prices"), type = "b")
+plot(Cl(peaks), main = "Peaks", type = "b")
+plot(Cl(troughs), main = "Troughs", type = "b")
+```
+
+## Catch the drop
+
+```{r}
+recentBottom = biggest_drop(clean_price)
+print(recentBottom)
+```
+
+## Fluctuation Study for the Bull Segment
+
+```{r}
+BullPeriod = bull_segment(clean_price) ## Get the bull segment first
+print(BullPeriod)
+
+if (any(is.na(BullPeriod$min_date), is.na(BullPeriod$peak_after_min_date))) {
+    warning("Skipping fluctuation calculation: NA dates detected")
+    fluc_pct <- NULL
+} else {
+    fluc_pct <- get_fluctuations(...)
+    fluc_pct <- as.numeric(fluc_pct)
+  
+    # remove NA just in case
+    
+    fluc_pct <- fluc_pct[!is.na(fluc_pct)]
+    
+    hist(as.numeric(fluc_pct),
+         main = "Bull Segment Fluctuations",
+         xlab = "Peak-Trough Fluctuation (%)",
+         col = "lightblue",
+         breaks = 30)
+    
+    cat("Worst drop (%):", round(min(fluc_pct), 2), "\n")
+}
+# ensure numeric
+
+
+
+```
+
+## Price Time Series (Remove Continuous Rises/Drops)
+
+```{r}
+price <- Cl(clean_price)
+
+fluct_pct <- diff(price) / lag(price) * 100
+fluct_pct <- fluct_pct[!is.na(fluct_pct)]
+par(mfrow = c(2,1))
+
+plot(price, main = "Clean Price")
+
+hist(fluct_pct,
+     breaks = 50,
+     main = "Daily % Change Distribution",
+     xlab = "% Change",
+     col = "lightblue")
+```
+
+### Gaussian Fit the % Change
+
+```{r}
+fit <- fitdist(fluct_pct, "norm")
+
+mu <- fit$estimate["mean"]
+sigma <- fit$estimate["sd"]
+
+hist(fluct_pct,
+     breaks = 50,
+     probability = TRUE,
+     main = "Gaussian Fit",
+     xlab = "% Change",
+     col = "lightblue")
+
+curve(dnorm(x, mean = mu, sd = sigma),
+      add = TRUE,
+      col = "red",
+      lwd = 2)
+
+cat("Mean (mu):", round(mu, 4), "\n")
+cat("Std  (sigma):", round(sigma, 4), "\n")
+```
+
+### Get Quantile
+
+```{r}
+qnorm(0.05, mean = mu, sd = sigma)
+```
+
+### Sample daily return check
+
+```{r}
+ret <- dailyReturn(Cl(thisData))
+
+mu <- mean(ret, na.rm = TRUE)
+sigma <- sd(ret, na.rm = TRUE)
+
+hist(ret,
+     main = paste("Daily Returns of", symbol),
+     xlab = "Return",
+     col = "lightblue",
+     breaks = 50)
+
+legend("topright",
+       legend = sprintf("mean = %.4f\nsd = %.4f", mu, sigma),
+       bty = "n")
+```
