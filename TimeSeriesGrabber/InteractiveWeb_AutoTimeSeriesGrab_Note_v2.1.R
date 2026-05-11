@@ -147,11 +147,40 @@ normalize_results <- function(results) {
   rownames(results) <- NULL
   results
 }
+
+table_row_data <- function(results, i) {
+  row <- normalize_results(results)[i, , drop = FALSE]
+  unname(as.list(row[1, ]))
+}
 # -----------------------------
 # UI
 # -----------------------------
 
 ui <- fluidPage(
+  tags$script(HTML("
+    Shiny.addCustomMessageHandler('updateRiskTableRow', function(message) {
+      var tableNode = $('#table table.dataTable');
+      if (!tableNode.length || !$.fn.dataTable.isDataTable(tableNode)) return;
+
+      var table = tableNode.DataTable();
+      var symbol = String(message.symbol || '').toUpperCase();
+      var updated = false;
+
+      table.rows().every(function() {
+        var rowData = this.data();
+        if (String(rowData[0] || '').toUpperCase() === symbol) {
+          this.data(message.rowData);
+          updated = true;
+        }
+      });
+
+      if (!updated) {
+        table.row.add(message.rowData);
+      }
+
+      table.draw(false);
+    });
+  ")),
   titlePanel("Multi-Ticker Risk Dashboard"),
   
   sidebarLayout(
@@ -181,7 +210,19 @@ server <- function(input, output, session) {
     results = normalize_results(if (file.exists(file_path)) read.csv(file_path) else NULL),
     selected = NULL
   )
-  
+
+  get_table_row <- function(display_row) {
+    if (length(display_row) != 1 || is.na(display_row)) {
+      return(display_row)
+    }
+
+    if (!is.null(input$table_rows_current) &&
+        length(input$table_rows_current) >= display_row) {
+      input$table_rows_current[[display_row]]
+    } else {
+      display_row
+    }
+  }
   
   # -------------------------
   # Run analysis
@@ -241,6 +282,11 @@ server <- function(input, output, session) {
     
     rv$results <- normalize_results(rv$results)
     write.csv(rv$results, file_path, row.names = FALSE)
+    idx <- which(toupper(trimws(rv$results$Symbol)) == sym)
+    session$sendCustomMessage(
+      "updateRiskTableRow",
+      list(symbol = sym, rowData = table_row_data(rv$results, idx))
+    )
     
     rv$selected <- list(
       fluc = f$fluc,
@@ -256,7 +302,7 @@ server <- function(input, output, session) {
   
   output$table <- renderDT({
     datatable(
-      rv$results,
+      isolate(rv$results),
       selection = "single",
       editable = list(
         target = "cell",
@@ -266,14 +312,16 @@ server <- function(input, output, session) {
       escape = FALSE,
       options = list(
         scrollX = TRUE,
-        stateSave = TRUE
+        stateSave = TRUE,
+        columnDefs = list(
+          list(
+            targets = c(1, 2, 3, 4, 5),
+            render = JS("$.fn.dataTable.render.number(',', '.', 2)")
+          )
+        )
       )
       
-    )%>%
-      formatRound(
-        columns = c("VaR_05", "BigDrop", "Frac1", "Frac2", "Risk"),
-        digits = 2
-      )
+    )
   }, server = FALSE)
   # -------------------------
   # Edit handler
@@ -282,12 +330,7 @@ server <- function(input, output, session) {
   observeEvent(input$table_cell_edit, {
     
     e <- input$table_cell_edit
-    i <- if (!is.null(input$table_rows_current) &&
-             length(input$table_rows_current) >= e$row) {
-      input$table_rows_current[[e$row]]
-    } else {
-      e$row
-    }
+    i <- get_table_row(e$row)
     j <- e$col
     
     if (j!=3) return()
@@ -308,12 +351,19 @@ server <- function(input, output, session) {
     rv$results <- normalize_results(rv$results)
     
     write.csv(rv$results, file_path, row.names = FALSE)
+    session$sendCustomMessage(
+      "updateRiskTableRow",
+      list(
+        symbol = rv$results$Symbol[[i]],
+        rowData = table_row_data(rv$results, i)
+      )
+    )
   })
   
   observeEvent(input$table_rows_selected, {
     
-    i <- input$table_rows_selected
-    req(length(i) == 1)
+    req(length(input$table_rows_selected) == 1)
+    i <- get_table_row(input$table_rows_selected)
     req(i > 0)
     req(i <= nrow(rv$results))
     
