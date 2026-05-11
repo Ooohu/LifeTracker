@@ -93,60 +93,6 @@ get_fluc_fit <- function(price, trim = 0.05) {
   )
 }
 
-biggest_drop <- function(clean_price) {
-  
-  if (is.null(clean_price) || NROW(clean_price) < 2) return(NULL)
-  
-  price <- tryCatch(Cl(clean_price), error = function(e) clean_price)
-  price <- na.omit(price)
-  
-  if (is.null(price) || NROW(price) < 2) return(NULL)
-  
-  price_vec <- as.numeric(price)
-  run_peak <- cummax(price_vec)
-  dd <- 100 * (price_vec - run_peak) / run_peak
-  
-  end_i <- which.min(dd)
-  if (is.na(end_i) || end_i <= 1) return(0)
-  
-  start_i <- which.max(price_vec[1:end_i])
-  
-  start <- price_vec[start_i]
-  end <- price_vec[end_i]
-  
-  drop <- (end - start) / start * 100
-  as.numeric(drop)
-}
-
-normalize_results <- function(results) {
-  
-  cols <- c("Symbol", "VaR_05", "BigDrop", "Frac1", "Frac2", "Risk", "LastMod")
-  
-  if (is.null(results) || nrow(results) == 0) {
-    return(data.frame(
-      Symbol = character(), VaR_05 = numeric(),
-      BigDrop = numeric(), Frac1 = numeric(),
-      Frac2 = numeric(), Risk = numeric(),
-      LastMod = character()
-    ))
-  }
-  
-  results <- as.data.frame(results, stringsAsFactors = FALSE)
-  
-  for (col in setdiff(cols, names(results))) {
-    results[[col]] <- if (col %in% c("Symbol", "LastMod")) character() else numeric()
-  }
-  
-  results <- results[, cols, drop = FALSE]
-  results$Symbol <- toupper(trimws(results$Symbol))
-  
-  numeric_cols <- c("VaR_05", "BigDrop", "Frac1", "Frac2", "Risk")
-  results[numeric_cols] <- lapply(results[numeric_cols], as.numeric)
-  results$LastMod <- as.character(results$LastMod)
-  
-  rownames(results) <- NULL
-  results
-}
 # -----------------------------
 # UI
 # -----------------------------
@@ -178,7 +124,14 @@ server <- function(input, output, session) {
   timeframe <- "2025-04-10"
   
   rv <- reactiveValues(
-    results = normalize_results(if (file.exists(file_path)) read.csv(file_path) else NULL),
+    results = if (file.exists(file_path)) read.csv(file_path)
+    else data.frame(
+      ID = integer(),
+      Symbol=character(), VaR_05=numeric(),
+      BigDrop=numeric(), Frac1=numeric(),
+      Frac2=numeric(), Risk=numeric(),
+      LastMod = character()
+    ),
     selected = NULL
   )
   
@@ -206,13 +159,7 @@ server <- function(input, output, session) {
     }
     
     VaR <- qnorm(0.05, f$mu, f$sigma)
-    #worst <- min(f$fluc)
-    worst <- biggest_drop(d$price)
-    
-    if (is.null(worst)) {
-      showNotification("Insufficient data for biggest drop calculation", type = "error")
-      return()
-    }
+    worst <- min(f$fluc)
     
     f1 <- 0.5
     f2 <- 1 - f1
@@ -220,8 +167,18 @@ server <- function(input, output, session) {
     
     idx <- which(toupper(trimws(rv$results$Symbol)) == sym)
     
+    if (!"ID" %in% colnames(rv$results)) {
+      rv$results$ID <- seq_len(nrow(rv$results))
+    }
+    
+    new_id <- if (nrow(rv$results) == 0) {
+      1
+    } else {
+      max(rv$results$ID, na.rm = TRUE) + 1
+    }
     
     new_row <- data.frame(
+      ID = new_id,
       Symbol = sym,
       VaR_05 = VaR,
       BigDrop = worst,
@@ -230,16 +187,15 @@ server <- function(input, output, session) {
       Risk = risk,
       LastMod = format(Sys.time(), "%Y-%m-%d")
     )
-
-    rv$results <- normalize_results(rv$results)
     
     if (length(idx) == 0) {
       rv$results <- rbind(rv$results, new_row)
     } else {
-      rv$results[idx, ] <- new_row
+      new_row$ID <- rv$results$ID[idx]  # preserve ID
+      rv$results[idx, ] <- new_row[1, colnames(rv$results)]
     }
     
-    rv$results <- normalize_results(rv$results)
+    rv$results$Symbol <- toupper(trimws(rv$results$Symbol))
     write.csv(rv$results, file_path, row.names = FALSE)
     
     rv$selected <- list(
@@ -256,25 +212,23 @@ server <- function(input, output, session) {
   
   output$table <- renderDT({
     datatable(
-      rv$results,
       selection = "single",
+      rv$results,
       editable = list(
         target = "cell",
         disable = list(columns = c(0,1,2,4,5,6))  # only Frac1 editable (index 3)
       ),
       rownames = FALSE,
       escape = FALSE,
-      options = list(
-        scrollX = TRUE,
-        stateSave = TRUE
-      )
+      options = list(scrollX = TRUE)
       
     )%>%
       formatRound(
         columns = c("VaR_05", "BigDrop", "Frac1", "Frac2", "Risk"),
         digits = 2
       )
-  }, server = FALSE)
+  })
+  
   # -------------------------
   # Edit handler
   # -------------------------
@@ -282,12 +236,7 @@ server <- function(input, output, session) {
   observeEvent(input$table_cell_edit, {
     
     e <- input$table_cell_edit
-    i <- if (!is.null(input$table_rows_current) &&
-             length(input$table_rows_current) >= e$row) {
-      input$table_rows_current[[e$row]]
-    } else {
-      e$row
-    }
+    i <- e$row
     j <- e$col
     
     if (j!=3) return()
@@ -305,7 +254,6 @@ server <- function(input, output, session) {
       (1 - v) * rv$results$BigDrop[i]
     
     rv$results$LastMod[i] <- format(Sys.time(), "%Y-%m-%d")
-    rv$results <- normalize_results(rv$results)
     
     write.csv(rv$results, file_path, row.names = FALSE)
   })
