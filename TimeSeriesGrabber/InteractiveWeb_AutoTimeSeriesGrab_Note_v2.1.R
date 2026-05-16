@@ -157,6 +157,14 @@ table_row_data <- function(results, i) {
 # -----------------------------
 
 ui <- fluidPage(
+  tags$style(HTML("
+    #table input,
+    #table select,
+    #table textarea {
+      color: #111111 !important;
+      background-color: #ffffff !important;
+    }
+  ")),
   tags$script(HTML("
     Shiny.addCustomMessageHandler('updateRiskTableRow', function(message) {
       var tableNode = $('#table table.dataTable');
@@ -179,6 +187,12 @@ ui <- fluidPage(
       }
 
       table.draw(false);
+    });
+
+    $(document).on('focusin', '#table input[type=number]', function() {
+      this.step = '0.1';
+      this.min = '0';
+      this.max = '1';
     });
   ")),
   titlePanel("Multi-Ticker Risk Dashboard"),
@@ -255,13 +269,23 @@ server <- function(input, output, session) {
       return()
     }
     
-    f1 <- 0.5
-    f2 <- 1 - f1
-    risk <- f1 * VaR + f2 * worst
-    
+    rv$results <- normalize_results(rv$results)
     idx <- which(toupper(trimws(rv$results$Symbol)) == sym)
     
+    f1 <- if (length(idx) > 0) {
+      as.numeric(rv$results$Frac1[[idx[[1]]]])
+    } else {
+      0.5
+    }
     
+    if (is.na(f1)) {
+      f1 <- 0.5
+    }
+    
+    f1 <- max(0, min(1, f1))
+    f2 <- 1 - f1
+    risk <- f1 * VaR + f2 * worst
+
     new_row <- data.frame(
       Symbol = sym,
       VaR_05 = VaR,
@@ -271,13 +295,11 @@ server <- function(input, output, session) {
       Risk = risk,
       LastMod = format(Sys.time(), "%Y-%m-%d")
     )
-
-    rv$results <- normalize_results(rv$results)
     
     if (length(idx) == 0) {
       rv$results <- rbind(rv$results, new_row)
     } else {
-      rv$results[idx, ] <- new_row
+      rv$results[idx[[1]], ] <- new_row
     }
     
     rv$results <- normalize_results(rv$results)
@@ -285,7 +307,7 @@ server <- function(input, output, session) {
     idx <- which(toupper(trimws(rv$results$Symbol)) == sym)
     session$sendCustomMessage(
       "updateRiskTableRow",
-      list(symbol = sym, rowData = table_row_data(rv$results, idx))
+      list(symbol = sym, rowData = table_row_data(rv$results, idx[[1]]))
     )
     
     rv$selected <- list(
@@ -338,7 +360,7 @@ server <- function(input, output, session) {
     v <- as.numeric(e$value)
     if (is.na(v)) return()
     
-    v <- max(0, min(1, round(v / 0.05) * 0.05))
+    v <- max(0, min(1, round(v / 0.1) * 0.1))
     
     rv$results$Frac1[i] <- v
     rv$results$Frac2[i] <- 1 - v

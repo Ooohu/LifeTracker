@@ -1,3 +1,6 @@
 *.csv
 TimeSeriesGrabber/InquiryRecord.csv
 TimeSeriesGrabber/.Rhistory
+.DS_Store
+TimeSeriesGrabber/.Rhistory
+TimeSeriesGrabber/InquiryRecord.csv
