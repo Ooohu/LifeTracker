@@ -120,10 +120,11 @@ biggest_drop <- function(clean_price) {
 
 normalize_results <- function(results) {
   
-  cols <- c("Symbol", "VaR_05", "BigDrop", "Frac1", "Frac2", "Risk", "LastMod")
+  cols <- c("Bank", "Ref", "Symbol", "VaR_05", "BigDrop", "Frac1", "Frac2", "Risk", "LastMod")
   
   if (is.null(results) || nrow(results) == 0) {
     return(data.frame(
+      Bank = character(), Ref = numeric(),
       Symbol = character(), VaR_05 = numeric(),
       BigDrop = numeric(), Frac1 = numeric(),
       Frac2 = numeric(), Risk = numeric(),
@@ -134,13 +135,23 @@ normalize_results <- function(results) {
   results <- as.data.frame(results, stringsAsFactors = FALSE)
   
   for (col in setdiff(cols, names(results))) {
-    results[[col]] <- if (col %in% c("Symbol", "LastMod")) character() else numeric()
+    if (col == "Bank") {
+      results[[col]] <- rep("NA", nrow(results))
+    } else if (col %in% c("Symbol", "LastMod")) {
+      results[[col]] <- rep("", nrow(results))
+    } else {
+      results[[col]] <- rep(0, nrow(results))
+    }
   }
   
   results <- results[, cols, drop = FALSE]
+  results$Bank <- trimws(as.character(results$Bank))
+  results$Bank[is.na(results$Bank) | !results$Bank %in% c("Fids", "Char", "NA")] <- "NA"
+  results$Ref <- as.numeric(results$Ref)
+  results$Ref[is.na(results$Ref)] <- 0
   results$Symbol <- toupper(trimws(results$Symbol))
   
-  numeric_cols <- c("VaR_05", "BigDrop", "Frac1", "Frac2", "Risk")
+  numeric_cols <- c("Ref", "VaR_05", "BigDrop", "Frac1", "Frac2", "Risk")
   results[numeric_cols] <- lapply(results[numeric_cols], as.numeric)
   results$LastMod <- as.character(results$LastMod)
   
@@ -151,6 +162,19 @@ normalize_results <- function(results) {
 table_row_data <- function(results, i) {
   row <- normalize_results(results)[i, , drop = FALSE]
   unname(as.list(row[1, ]))
+}
+
+preset_frac1 <- function(VaR, worst, target = -10) {
+  if (is.na(VaR) || is.na(worst) || VaR == worst) {
+    return(0)
+  }
+
+  f1 <- (target - worst) / (VaR - worst)
+  if (is.na(f1) || f1 < 0 || f1 > 1) {
+    return(0)
+  }
+
+  f1
 }
 # -----------------------------
 # UI
@@ -176,7 +200,7 @@ ui <- fluidPage(
 
       table.rows().every(function() {
         var rowData = this.data();
-        if (String(rowData[0] || '').toUpperCase() === symbol) {
+        if (String(rowData[2] || '').toUpperCase() === symbol) {
           this.data(message.rowData);
           updated = true;
         }
@@ -189,10 +213,56 @@ ui <- fluidPage(
       table.draw(false);
     });
 
+    function getRiskTableRowData(element) {
+      var tableNode = $('#table table.dataTable');
+      if (!tableNode.length || !$.fn.dataTable.isDataTable(tableNode)) return null;
+
+      var table = tableNode.DataTable();
+      var row = table.row($(element).closest('tr'));
+      if (!row.length) return null;
+
+      return { table: table, row: row, data: row.data() };
+    }
+
+    $(document).on('change', '#table select.bank-select', function() {
+      var row = getRiskTableRowData(this);
+      if (!row || !row.data) return;
+
+      row.data[0] = this.value;
+      row.row.data(row.data).draw(false);
+      Shiny.setInputValue('table_bank_change', {
+        symbol: row.data[2],
+        value: this.value,
+        nonce: Math.random()
+      }, {priority: 'event'});
+    });
+
+    $(document).on('change', '#table input.ref-input', function() {
+      var row = getRiskTableRowData(this);
+      if (!row || !row.data) return;
+
+      var value = Number(this.value);
+      if (!isFinite(value)) value = 0;
+
+      row.data[1] = value;
+      row.row.data(row.data).draw(false);
+      Shiny.setInputValue('table_ref_change', {
+        symbol: row.data[2],
+        value: value,
+        nonce: Math.random()
+      }, {priority: 'event'});
+    });
+
     $(document).on('focusin', '#table input[type=number]', function() {
-      this.step = '0.1';
-      this.min = '0';
-      this.max = '1';
+      if ($(this).hasClass('ref-input')) {
+        this.step = 'any';
+        this.removeAttribute('min');
+        this.removeAttribute('max');
+      } else {
+        this.step = '0.1';
+        this.min = '0';
+        this.max = '1';
+      }
     });
   ")),
   titlePanel("Multi-Ticker Risk Dashboard"),
@@ -275,18 +345,30 @@ server <- function(input, output, session) {
     f1 <- if (length(idx) > 0) {
       as.numeric(rv$results$Frac1[[idx[[1]]]])
     } else {
-      0.5
+      preset_frac1(VaR, worst)
     }
     
     if (is.na(f1)) {
-      f1 <- 0.5
+      f1 <- if (length(idx) > 0) 0.5 else 0
     }
     
     f1 <- max(0, min(1, f1))
     f2 <- 1 - f1
     risk <- f1 * VaR + f2 * worst
+    bank <- if (length(idx) > 0) rv$results$Bank[[idx[[1]]]] else "NA"
+    ref <- if (length(idx) > 0) as.numeric(rv$results$Ref[[idx[[1]]]]) else 0
+
+    if (is.na(bank) || !bank %in% c("Fids", "Char", "NA")) {
+      bank <- "NA"
+    }
+
+    if (is.na(ref)) {
+      ref <- 0
+    }
 
     new_row <- data.frame(
+      Bank = bank,
+      Ref = ref,
       Symbol = sym,
       VaR_05 = VaR,
       BigDrop = worst,
@@ -328,7 +410,7 @@ server <- function(input, output, session) {
       selection = "single",
       editable = list(
         target = "cell",
-        disable = list(columns = c(0,1,2,4,5,6))  # only Frac1 editable (index 3)
+        disable = list(columns = c(0,1,2,3,4,6,7,8))  # only Frac1 editable (index 5)
       ),
       rownames = FALSE,
       escape = FALSE,
@@ -337,7 +419,37 @@ server <- function(input, output, session) {
         stateSave = TRUE,
         columnDefs = list(
           list(
-            targets = c(1, 2, 3, 4, 5),
+            targets = 0,
+            render = JS(
+              "function(data, type, row, meta) {
+                if (type !== 'display') return data;
+                var current = String(data || 'NA');
+                var opts = ['Fids', 'Char', 'NA'];
+                var html = '<select class=\"bank-select\">';
+                for (var i = 0; i < opts.length; i++) {
+                  var selected = opts[i] === current ? ' selected' : '';
+                  html += '<option value=\"' + opts[i] + '\"' + selected + '>' + opts[i] + '</option>';
+                }
+                html += '</select>';
+                return html;
+              }"
+            )
+          ),
+          list(
+            targets = 1,
+            render = JS(
+              "function(data, type, row, meta) {
+                if (type !== 'display') return data;
+                var value = Number(data);
+                if (!isFinite(value)) value = 0;
+                 return '<input class=\"ref-input\" type=\"number\" ' +
+                         'style=\"width:40px;padding:2px;\" ' +
+                         'value=\"' + value + '\">';
+              }"
+            )
+          ),
+          list(
+            targets = c(3, 4, 5, 6, 7),
             render = JS("$.fn.dataTable.render.number(',', '.', 2)")
           )
         )
@@ -345,6 +457,45 @@ server <- function(input, output, session) {
       
     )
   }, server = FALSE)
+
+  observeEvent(input$table_bank_change, {
+    
+    e <- input$table_bank_change
+    sym <- toupper(trimws(e$symbol))
+    bank <- as.character(e$value)
+
+    if (!bank %in% c("Fids", "Char", "NA")) {
+      bank <- "NA"
+    }
+
+    rv$results <- normalize_results(rv$results)
+    idx <- which(toupper(trimws(rv$results$Symbol)) == sym)
+    if (length(idx) == 0) return()
+
+    rv$results$Bank[[idx[[1]]]] <- bank
+    rv$results <- normalize_results(rv$results)
+    write.csv(rv$results, file_path, row.names = FALSE)
+  })
+
+  observeEvent(input$table_ref_change, {
+    
+    e <- input$table_ref_change
+    sym <- toupper(trimws(e$symbol))
+    ref <- as.numeric(e$value)
+
+    if (is.na(ref)) {
+      ref <- 0
+    }
+
+    rv$results <- normalize_results(rv$results)
+    idx <- which(toupper(trimws(rv$results$Symbol)) == sym)
+    if (length(idx) == 0) return()
+
+    rv$results$Ref[[idx[[1]]]] <- ref
+    rv$results <- normalize_results(rv$results)
+    write.csv(rv$results, file_path, row.names = FALSE)
+  })
+
   # -------------------------
   # Edit handler
   # -------------------------
@@ -355,7 +506,7 @@ server <- function(input, output, session) {
     i <- get_table_row(e$row)
     j <- e$col
     
-    if (j!=3) return()
+    if (j!=5) return()
     
     v <- as.numeric(e$value)
     if (is.na(v)) return()
