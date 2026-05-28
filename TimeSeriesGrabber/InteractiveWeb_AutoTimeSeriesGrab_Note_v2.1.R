@@ -120,12 +120,12 @@ biggest_drop <- function(clean_price) {
 
 normalize_results <- function(results) {
   
-  cols <- c("Bank", "Ref", "Symbol", "VaR_05", "BigDrop", "Frac1", "Frac2", "Risk", "LastMod")
+  cols <- c("Bank", "Ref", "Symbol", "VaR_05", "VaR_95", "BigDrop", "Frac1", "Frac2", "Risk", "LastMod")
   
   if (is.null(results) || nrow(results) == 0) {
     return(data.frame(
       Bank = character(), Ref = numeric(),
-      Symbol = character(), VaR_05 = numeric(),
+      Symbol = character(), VaR_05 = numeric(), VaR_95 = numeric(),
       BigDrop = numeric(), Frac1 = numeric(),
       Frac2 = numeric(), Risk = numeric(),
       LastMod = character()
@@ -151,7 +151,7 @@ normalize_results <- function(results) {
   results$Ref[is.na(results$Ref)] <- 0
   results$Symbol <- toupper(trimws(results$Symbol))
   
-  numeric_cols <- c("Ref", "VaR_05", "BigDrop", "Frac1", "Frac2", "Risk")
+  numeric_cols <- c("Ref", "VaR_05", "VaR_95", "BigDrop", "Frac1", "Frac2", "Risk")
   results[numeric_cols] <- lapply(results[numeric_cols], as.numeric)
   results$LastMod <- as.character(results$LastMod)
   
@@ -187,6 +187,19 @@ ui <- fluidPage(
     #table textarea {
       color: #111111 !important;
       background-color: #ffffff !important;
+    }
+
+    #table .ref-input {
+      width: 3.5em !important;
+      padding: 2px !important;
+      box-sizing: border-box;
+    }
+
+    #table table.dataTable th:nth-child(2),
+    #table table.dataTable td:nth-child(2) {
+      width: 56px !important;
+      min-width: 56px !important;
+      max-width: 56px !important;
     }
   ")),
   tags$script(HTML("
@@ -331,6 +344,7 @@ server <- function(input, output, session) {
     }
     
     VaR <- qnorm(0.05, f$mu, f$sigma)
+    VaR_95 <- qnorm(0.95, f$mu, f$sigma)
     #worst <- min(f$fluc)
     worst <- biggest_drop(d$price)
     
@@ -371,6 +385,7 @@ server <- function(input, output, session) {
       Ref = ref,
       Symbol = sym,
       VaR_05 = VaR,
+      VaR_95 = VaR_95,
       BigDrop = worst,
       Frac1 = f1,
       Frac2 = f2,
@@ -410,13 +425,14 @@ server <- function(input, output, session) {
       selection = "single",
       editable = list(
         target = "cell",
-        disable = list(columns = c(0,1,2,3,4,6,7,8))  # only Frac1 editable (index 5)
+        disable = list(columns = c(0,1,2,3,4,5,7,8,9))  # only Frac1 editable (index 6)
       ),
       rownames = FALSE,
       escape = FALSE,
       options = list(
         scrollX = TRUE,
         stateSave = TRUE,
+        autoWidth = FALSE,
         columnDefs = list(
           list(
             targets = 0,
@@ -437,6 +453,7 @@ server <- function(input, output, session) {
           ),
           list(
             targets = 1,
+            width = "56px",
             render = JS(
               "function(data, type, row, meta) {
                 if (type !== 'display') return data;
@@ -449,7 +466,7 @@ server <- function(input, output, session) {
             )
           ),
           list(
-            targets = c(3, 4, 5, 6, 7),
+            targets = c(3, 4, 5, 6, 7, 8),
             render = JS("$.fn.dataTable.render.number(',', '.', 2)")
           )
         )
@@ -506,7 +523,7 @@ server <- function(input, output, session) {
     i <- get_table_row(e$row)
     j <- e$col
     
-    if (j!=5) return()
+    if (j!=6) return()
     
     v <- as.numeric(e$value)
     if (is.na(v)) return()
