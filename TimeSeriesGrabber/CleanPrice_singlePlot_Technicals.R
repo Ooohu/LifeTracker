@@ -218,11 +218,13 @@ plot_technicals <- function(symbol, from, short_ema_days, long_ema_days, rsi_day
 
   macd <- MACD(price, nFast = 12, nSlow = 26, nSig = 9, maType = EMA, percent = FALSE)
   rsi <- RSI(price, n = rsi_days, maType = EMA)
+  rsi_sma <- SMA(rsi, n = 10)
 
   x <- index(price)
   macd_y <- as.numeric(macd[, "macd"])
   signal_y <- as.numeric(macd[, "signal"])
   rsi_y <- as.numeric(rsi)
+  rsi_sma_y <- as.numeric(rsi_sma)
   layout(matrix(c(1, 2), nrow = 2), heights = c(1, 1))
 
   par(mar = c(2, 4, 2.5, 1), xaxs = "i")
@@ -260,18 +262,20 @@ plot_technicals <- function(symbol, from, short_ema_days, long_ema_days, rsi_day
     lwd = 1.6,
     ylim = range(c(0, 100, rsi_y, overbought, oversold), na.rm = TRUE)
   )
+  lines(x, rsi_sma_y, col = "#ff7f0e", lwd = 1.6)
   abline(h = overbought, col = "#d62728", lty = 2, lwd = 1.3)
   abline(h = oversold, col = "#1f77b4", lty = 2, lwd = 1.3)
   legend(
     "topleft",
     legend = c(
       paste0("RSI (", rsi_days, ")"),
+      "RSI SMA(10)",
       paste0("OverBought ", overbought),
       paste0("OverSold ", oversold)
     ),
-    col = c("#2ca02c", "#d62728", "#1f77b4"),
-    lwd = c(1.6, 1.3, 1.3),
-    lty = c(1, 2, 2),
+    col = c("#2ca02c", "#ff7f0e", "#d62728", "#1f77b4"),
+    lwd = c(1.6, 1.6, 1.3, 1.3),
+    lty = c(1, 1, 2, 2),
     bty = "n"
   )
 }
