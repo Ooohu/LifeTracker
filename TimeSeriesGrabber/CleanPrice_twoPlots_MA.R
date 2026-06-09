@@ -134,12 +134,10 @@ get_strategy <- function(symbol, from, ma20_weight, strategy_scale) {
 
   holding <- round(clip01(0.5 + strategy_scale * s), 2)
   hedging <- round(clip01(0.5 - strategy_scale * s), 2)
-  cash <- round(1 - holding - hedging, 2)
 
   list(
     holding = holding,
-    hedging = hedging,
-    cash = cash
+    hedging = hedging
   )
 }
 
@@ -231,8 +229,8 @@ ui <- fluidPage(
       div(
         class = "parameter-row",
         div(class = "symbol-row", textInput("symbol_top", NULL, "SPY", placeholder = "Symbol")),
-        numericInput("ma20_weight", "MA20 Weight", value = 0.1, min = 0, max = 1, step = 0.05),
-        numericInput("strategy_scale", "Scale", value = 7, min = 0, max = 10, step = 0.1)
+        numericInput("ma20_weight", "MA20 Weight", value = 0.25, min = 0, max = 1, step = 0.05),
+        numericInput("strategy_scale", "Scale", value = 1.7, min = 0, max = 10, step = 0.1)
       ),
       div(
         class = "right-readout",
@@ -286,8 +284,7 @@ server <- function(input, output, session) {
       class = "strategy-block",
       div(class = "strategy-title", "Strategy:"),
       div(sprintf("HOLDING = %.2f", strategy$holding)),
-      div(sprintf("HEDGING = %.2f", strategy$hedging)),
-      div(sprintf("CASH    = %.2f", strategy$cash))
+      div(sprintf("HEDGING = %.2f", strategy$hedging))
     )
   })
 

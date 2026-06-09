@@ -146,7 +146,7 @@ normalize_results <- function(results) {
   
   results <- results[, cols, drop = FALSE]
   results$Bank <- trimws(as.character(results$Bank))
-  results$Bank[is.na(results$Bank) | !results$Bank %in% c("Fids", "Char", "NA")] <- "NA"
+  results$Bank[is.na(results$Bank) | !results$Bank %in% c("Tier1", "Tier2","Tier3", "NA")] <- "NA"
   results$Ref <- as.numeric(results$Ref)
   results$Ref[is.na(results$Ref)] <- 0
   results$Symbol <- toupper(trimws(results$Symbol))
@@ -176,6 +176,24 @@ preset_frac1 <- function(VaR, worst, target = -10) {
 
   f1
 }
+
+get_fear_gauge <- function() {
+  vix <- tryCatch(
+    getSymbols("^VIX", auto.assign = FALSE, from = Sys.Date() - 30),
+    error = function(e) NULL
+  )
+
+  if (is.null(vix) || NROW(vix) == 0) {
+    return(NULL)
+  }
+
+  close <- tryCatch(na.omit(Cl(vix)), error = function(e) NULL)
+  if (is.null(close) || NROW(close) == 0) {
+    return(NULL)
+  }
+
+  as.numeric(tail(close, 1))
+}
 # -----------------------------
 # UI
 # -----------------------------
@@ -200,6 +218,25 @@ ui <- fluidPage(
       width: 56px !important;
       min-width: 56px !important;
       max-width: 56px !important;
+    }
+
+    .title-row {
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .title-row h2 {
+      margin: 0;
+    }
+
+    .fear-gauge {
+      font-size: 15px;
+      font-weight: 600;
+      color: #333333;
+      white-space: nowrap;
     }
   ")),
   tags$script(HTML("
@@ -278,7 +315,11 @@ ui <- fluidPage(
       }
     });
   ")),
-  titlePanel("Multi-Ticker Risk Dashboard"),
+  tags$div(
+    class = "title-row",
+    tags$h2("Multi-Ticker Risk Dashboard"),
+    tags$span(class = "fear-gauge", "Fear Gauge (VIX): ", textOutput("fear_gauge", inline = TRUE))
+  ),
   
   sidebarLayout(
     sidebarPanel(
@@ -307,6 +348,15 @@ server <- function(input, output, session) {
     results = normalize_results(if (file.exists(file_path)) read.csv(file_path) else NULL),
     selected = NULL
   )
+
+  output$fear_gauge <- renderText({
+    vix <- get_fear_gauge()
+    if (is.null(vix) || is.na(vix)) {
+      return("--")
+    }
+
+    format(round(vix, 2), nsmall = 2)
+  })
 
   get_table_row <- function(display_row) {
     if (length(display_row) != 1 || is.na(display_row)) {
@@ -372,7 +422,7 @@ server <- function(input, output, session) {
     bank <- if (length(idx) > 0) rv$results$Bank[[idx[[1]]]] else "NA"
     ref <- if (length(idx) > 0) as.numeric(rv$results$Ref[[idx[[1]]]]) else 0
 
-    if (is.na(bank) || !bank %in% c("Fids", "Char", "NA")) {
+    if (is.na(bank) || !bank %in% c("Tier1", "Tier2","Tier3", "NA")) {
       bank <- "NA"
     }
 
@@ -440,7 +490,7 @@ server <- function(input, output, session) {
               "function(data, type, row, meta) {
                 if (type !== 'display') return data;
                 var current = String(data || 'NA');
-                var opts = ['Fids', 'Char', 'NA'];
+                var opts = ['Tier1', 'Tier2','Tier3', 'NA'];
                 var html = '<select class=\"bank-select\">';
                 for (var i = 0; i < opts.length; i++) {
                   var selected = opts[i] === current ? ' selected' : '';
@@ -481,7 +531,7 @@ server <- function(input, output, session) {
     sym <- toupper(trimws(e$symbol))
     bank <- as.character(e$value)
 
-    if (!bank %in% c("Fids", "Char", "NA")) {
+    if (!bank %in% c("Tier1", "Tier2","Tier3", "NA")) {
       bank <- "NA"
     }
 
@@ -613,3 +663,4 @@ shinyApp(ui, server)
 
 
 #shiny::runApp("InteractiveWeb_AutoTimeSeriesGrab_Note_v2.1.R")
+
