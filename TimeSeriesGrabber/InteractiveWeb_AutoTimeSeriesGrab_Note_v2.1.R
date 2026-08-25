@@ -120,14 +120,13 @@ biggest_drop <- function(clean_price) {
 
 normalize_results <- function(results) {
   
-  cols <- c("Bank", "Ref", "Symbol", "VaR_05", "VaR_95", "BigDrop", "Frac1", "Frac2", "Risk", "LastMod")
+  cols <- c("Bank", "Symbol", "IWgt", "FWgt", "RefP", "CurP", "VaR_05", "BigDrop", "ADR5", "LastMod")
   
   if (is.null(results) || nrow(results) == 0) {
     return(data.frame(
-      Bank = character(), Ref = numeric(),
-      Symbol = character(), VaR_05 = numeric(), VaR_95 = numeric(),
-      BigDrop = numeric(), Frac1 = numeric(),
-      Frac2 = numeric(), Risk = numeric(),
+      Bank = character(), Symbol = character(), IWgt = numeric(), FWgt = numeric(),
+      RefP = numeric(), CurP = numeric(),
+      VaR_05 = numeric(), BigDrop = numeric(), ADR5 = numeric(),
       LastMod = character()
     ))
   }
@@ -136,9 +135,11 @@ normalize_results <- function(results) {
   
   for (col in setdiff(cols, names(results))) {
     if (col == "Bank") {
-      results[[col]] <- rep("NA", nrow(results))
+      results[[col]] <- rep("zNA", nrow(results))
     } else if (col %in% c("Symbol", "LastMod")) {
       results[[col]] <- rep("", nrow(results))
+    } else if (col == "RefP") {
+      results[[col]] <- rep(NA_real_, nrow(results))
     } else {
       results[[col]] <- rep(0, nrow(results))
     }
@@ -146,13 +147,14 @@ normalize_results <- function(results) {
   
   results <- results[, cols, drop = FALSE]
   results$Bank <- trimws(as.character(results$Bank))
-  results$Bank[is.na(results$Bank) | !results$Bank %in% c("Tier1", "Tier2","Tier3", "NA")] <- "NA"
-  results$Ref <- as.numeric(results$Ref)
-  results$Ref[is.na(results$Ref)] <- 0
+  results$Bank[is.na(results$Bank) | !results$Bank %in% c("Tier1", "Tier2","Tier3", "zNA")] <- "zNA"
+  results$IWgt <- as.numeric(results$IWgt)
+  results$IWgt[is.na(results$IWgt)] <- 0
   results$Symbol <- toupper(trimws(results$Symbol))
   
-  numeric_cols <- c("Ref", "VaR_05", "VaR_95", "BigDrop", "Frac1", "Frac2", "Risk")
+  numeric_cols <- c("IWgt", "FWgt", "RefP", "CurP", "VaR_05", "BigDrop", "ADR5")
   results[numeric_cols] <- lapply(results[numeric_cols], as.numeric)
+  results$RefP <- round(results$RefP, 1)
   results$LastMod <- as.character(results$LastMod)
   
   rownames(results) <- NULL
@@ -164,22 +166,10 @@ table_row_data <- function(results, i) {
   unname(as.list(row[1, ]))
 }
 
-preset_frac1 <- function(VaR, worst, target = -10) {
-  if (is.na(VaR) || is.na(worst) || VaR == worst) {
-    return(0)
-  }
-
-  f1 <- (target - worst) / (VaR - worst)
-  if (is.na(f1) || f1 < 0 || f1 > 1) {
-    return(0)
-  }
-
-  f1
-}
 
 get_fear_gauge <- function() {
   vix <- tryCatch(
-    getSymbols("^VIX", auto.assign = FALSE, from = Sys.Date() - 30),
+    getSymbols("^VIX", auto.assign = FALSE, from = Sys.Date() - 60),
     error = function(e) NULL
   )
 
@@ -192,7 +182,16 @@ get_fear_gauge <- function() {
     return(NULL)
   }
 
-  as.numeric(tail(close, 1))
+  close_values <- as.numeric(close)
+  if (length(close_values) < 20) {
+    return(NULL)
+  }
+
+  list(
+    current = tail(close_values, 1),
+    sma_20 = mean(tail(close_values, 20)),
+    sma_10 = mean(tail(close_values, 10))
+  )
 }
 # -----------------------------
 # UI
@@ -207,7 +206,7 @@ ui <- fluidPage(
       background-color: #ffffff !important;
     }
 
-    #table .ref-input {
+    #table .IWgt-input {
       width: 3.5em !important;
       padding: 2px !important;
       box-sizing: border-box;
@@ -215,9 +214,28 @@ ui <- fluidPage(
 
     #table table.dataTable th:nth-child(2),
     #table table.dataTable td:nth-child(2) {
+      width: 6ch !important;
+      min-width: 6ch !important;
+      max-width: 6ch !important;
+    }
+
+    #table table.dataTable th:nth-child(3),
+    #table table.dataTable td:nth-child(3) {
       width: 56px !important;
       min-width: 56px !important;
       max-width: 56px !important;
+    }
+
+    #table tbody tr.refp-above-curp > td,
+    #table tbody tr.refp-above-curp input,
+    #table tbody tr.refp-above-curp select {
+      background-color: #fff1f1 !important;
+    }
+
+    #table tbody tr.refp-below-curp > td,
+    #table tbody tr.refp-below-curp input,
+    #table tbody tr.refp-below-curp select {
+      background-color: #f1fbf3 !important;
     }
 
     .title-row {
@@ -250,7 +268,7 @@ ui <- fluidPage(
 
       table.rows().every(function() {
         var rowData = this.data();
-        if (String(rowData[2] || '').toUpperCase() === symbol) {
+        if (String(rowData[1] || '').toUpperCase() === symbol) {
           this.data(message.rowData);
           updated = true;
         }
@@ -281,30 +299,46 @@ ui <- fluidPage(
       row.data[0] = this.value;
       row.row.data(row.data).draw(false);
       Shiny.setInputValue('table_bank_change', {
-        symbol: row.data[2],
+        symbol: row.data[1],
         value: this.value,
         nonce: Math.random()
       }, {priority: 'event'});
     });
 
-    $(document).on('change', '#table input.ref-input', function() {
+    $(document).on('change', '#table input.IWgt-input', function() {
       var row = getRiskTableRowData(this);
       if (!row || !row.data) return;
 
       var value = Number(this.value);
       if (!isFinite(value)) value = 0;
 
-      row.data[1] = value;
+      row.data[2] = value;
       row.row.data(row.data).draw(false);
-      Shiny.setInputValue('table_ref_change', {
-        symbol: row.data[2],
+      Shiny.setInputValue('table_iwgt_change', {
+        symbol: row.data[1],
+        value: value,
+        nonce: Math.random()
+      }, {priority: 'event'});
+    });
+
+    $(document).on('change', '#table input.refp-input', function() {
+      var row = getRiskTableRowData(this);
+      if (!row || !row.data) return;
+
+      var value = this.value === '' ? null : Number(this.value);
+      if (value !== null && !isFinite(value)) return;
+
+      row.data[4] = value;
+      row.row.data(row.data).draw(false);
+      Shiny.setInputValue('table_refp_change', {
+        symbol: row.data[1],
         value: value,
         nonce: Math.random()
       }, {priority: 'event'});
     });
 
     $(document).on('focusin', '#table input[type=number]', function() {
-      if ($(this).hasClass('ref-input')) {
+      if ($(this).hasClass('IWgt-input') || $(this).hasClass('refp-input')) {
         this.step = 'any';
         this.removeAttribute('min');
         this.removeAttribute('max');
@@ -324,7 +358,8 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       textInput("symbol", "Ticker", "GOOGL"),
-      actionButton("go", "Run")
+      actionButton("go", "Run"),
+      actionButton("scan_all", "Scan All")
     ),
     
     mainPanel(
@@ -351,11 +386,15 @@ server <- function(input, output, session) {
 
   output$fear_gauge <- renderText({
     vix <- get_fear_gauge()
-    if (is.null(vix) || is.na(vix)) {
+    if (is.null(vix) || any(is.na(unlist(vix)))) {
       return("--")
     }
 
-    format(round(vix, 2), nsmall = 2)
+    paste0(
+      format(round(vix$current, 2), nsmall = 2),
+      " | 10-SMA: ", format(round(vix$sma_10, 2), nsmall = 2),
+      " | 20-SMA: ", format(round(vix$sma_20, 2), nsmall = 2)
+    )
   })
 
   get_table_row <- function(display_row) {
@@ -374,99 +413,140 @@ server <- function(input, output, session) {
   # -------------------------
   # Run analysis
   # -------------------------
-  
-  observeEvent(input$go, {
-    
-    sym <- toupper(trimws(input$symbol))
-    
+
+  refresh_ticker <- function(symbol, set_selected = TRUE) {
+    sym <- toupper(trimws(symbol))
     d <- get_data(sym, timeframe)
-    
+
     if (is.null(d)) {
-      showNotification("No valid price data", type = "error")
-      return()
+      return(list(ok = FALSE, message = paste("No valid price data for", sym)))
     }
-    
+
+    close_values <- as.numeric(na.omit(d$price))
+    if (length(close_values) < 6) {
+      return(list(ok = FALSE, message = paste("Insufficient closing-price data for", sym)))
+    }
+
     f <- get_fluc_fit(d$price)
-    
     if (is.null(f)) {
-      showNotification("Insufficient data for fitting. This ticker is basically a collapsing waterfall with no statistical dignity left.", type = "error")
-      return()
+      return(list(ok = FALSE, message = paste("Insufficient data for fitting", sym)))
     }
-    
-    VaR <- qnorm(0.05, f$mu, f$sigma)
-    VaR_95 <- qnorm(0.95, f$mu, f$sigma)
-    #worst <- min(f$fluc)
+
     worst <- biggest_drop(d$price)
-    
     if (is.null(worst)) {
-      showNotification("Insufficient data for biggest drop calculation", type = "error")
-      return()
+      return(list(ok = FALSE, message = paste("Insufficient data for biggest drop calculation", sym)))
     }
-    
+
+    VaR <- qnorm(0.05, f$mu, f$sigma)
+
     rv$results <- normalize_results(rv$results)
     idx <- which(toupper(trimws(rv$results$Symbol)) == sym)
-    
-    f1 <- if (length(idx) > 0) {
-      as.numeric(rv$results$Frac1[[idx[[1]]]])
-    } else {
-      preset_frac1(VaR, worst)
-    }
-    
-    if (is.na(f1)) {
-      f1 <- if (length(idx) > 0) 0.5 else 0
-    }
-    
-    f1 <- max(0, min(1, f1))
-    f2 <- 1 - f1
-    risk <- f1 * VaR + f2 * worst
-    bank <- if (length(idx) > 0) rv$results$Bank[[idx[[1]]]] else "NA"
-    ref <- if (length(idx) > 0) as.numeric(rv$results$Ref[[idx[[1]]]]) else 0
+    bank <- if (length(idx) > 0) rv$results$Bank[[idx[[1]]]] else "zNA"
+    iwgt <- if (length(idx) > 0) as.numeric(rv$results$IWgt[[idx[[1]]]]) else 0
+    refp <- if (length(idx) > 0) as.numeric(rv$results$RefP[[idx[[1]]]]) else NA_real_
 
-    if (is.na(bank) || !bank %in% c("Tier1", "Tier2","Tier3", "NA")) {
-      bank <- "NA"
+    if (is.na(bank) || !bank %in% c("Tier1", "Tier2", "Tier3", "zNA")) {
+      bank <- "zNA"
     }
+    if (is.na(iwgt)) {
+      iwgt <- 0
+    }
+    if (is.na(refp)) {
+      refp <- min(tail(close_values, 5))
+    }
+    refp <- round(refp, 1)
 
-    if (is.na(ref)) {
-      ref <- 0
-    }
+    curp <- tail(close_values, 1)
+    adr5 <- 100*mean(tail(diff(close_values) / head(close_values, -1), 5))
+    high_52wk <- max(tail(close_values, 252))
+    fwgt <- if (refp == 0 || worst == 0) NA_real_ else iwgt * (high_52wk / refp) / abs(worst * 0.01)
 
     new_row <- data.frame(
       Bank = bank,
-      Ref = ref,
       Symbol = sym,
+      IWgt = iwgt,
+      FWgt = fwgt,
+      RefP = refp,
+      CurP = curp,
       VaR_05 = VaR,
-      VaR_95 = VaR_95,
       BigDrop = worst,
-      Frac1 = f1,
-      Frac2 = f2,
-      Risk = risk,
+      ADR5 = adr5,
       LastMod = format(Sys.time(), "%Y-%m-%d")
     )
-    
+
     if (length(idx) == 0) {
       rv$results <- rbind(rv$results, new_row)
     } else {
       rv$results[idx[[1]], ] <- new_row
     }
-    
     rv$results <- normalize_results(rv$results)
+
+    if (set_selected) {
+      rv$selected <- list(fluc = f$fluc, mu = f$mu, sigma = f$sigma, symbol = sym)
+    }
+
+    list(ok = TRUE, symbol = sym)
+  }
+
+  observeEvent(input$go, {
+    result <- refresh_ticker(input$symbol)
+    if (!result$ok) {
+      showNotification(result$message, type = "error")
+      return()
+    }
+
     write.csv(rv$results, file_path, row.names = FALSE)
-    idx <- which(toupper(trimws(rv$results$Symbol)) == sym)
+    idx <- which(toupper(trimws(rv$results$Symbol)) == result$symbol)
     session$sendCustomMessage(
       "updateRiskTableRow",
-      list(symbol = sym, rowData = table_row_data(rv$results, idx[[1]]))
+      list(symbol = result$symbol, rowData = table_row_data(rv$results, idx[[1]]))
     )
-    
-    rv$selected <- list(
-      fluc = f$fluc,
-      mu = f$mu,
-      sigma = f$sigma,
-      symbol = sym
-    )
+  })
+
+  observeEvent(input$scan_all, {
+    rv$results <- normalize_results(rv$results)
+    symbols <- unique(toupper(trimws(rv$results$Symbol)))
+    symbols <- symbols[!is.na(symbols) & symbols != ""]
+
+    if (length(symbols) == 0) {
+      showNotification("There are no tickers in the table to scan.", type = "warning")
+      return()
+    }
+
+    refreshed <- character()
+    failed <- character()
+    withProgress(message = "Scanning tickers", value = 0, {
+      for (i in seq_along(symbols)) {
+        incProgress(1 / length(symbols), detail = symbols[[i]])
+        result <- refresh_ticker(symbols[[i]], set_selected = FALSE)
+        if (result$ok) {
+          refreshed <- c(refreshed, result$symbol)
+        } else {
+          failed <- c(failed, symbols[[i]])
+        }
+      }
+    })
+
+    if (length(refreshed) > 0) {
+      write.csv(rv$results, file_path, row.names = FALSE)
+      for (sym in refreshed) {
+        idx <- which(toupper(trimws(rv$results$Symbol)) == sym)
+        session$sendCustomMessage(
+          "updateRiskTableRow",
+          list(symbol = sym, rowData = table_row_data(rv$results, idx[[1]]))
+        )
+      }
+    }
+
+    message <- paste("Updated", length(refreshed), "of", length(symbols), "tickers.")
+    if (length(failed) > 0) {
+      message <- paste(message, "Skipped:", paste(failed, collapse = ", "))
+    }
+    showNotification(message, type = if (length(failed) > 0) "warning" else "message")
   })
   
   # -------------------------
-  # Table (Frac1 editable only)
+  # Table
   # -------------------------
   
   output$table <- renderDT({
@@ -475,7 +555,7 @@ server <- function(input, output, session) {
       selection = "single",
       editable = list(
         target = "cell",
-        disable = list(columns = c(0,1,2,3,4,5,7,8,9))  # only Frac1 editable (index 6)
+        disable = list(columns = c(0:9))
       ),
       rownames = FALSE,
       escape = FALSE,
@@ -483,14 +563,27 @@ server <- function(input, output, session) {
         scrollX = TRUE,
         stateSave = TRUE,
         autoWidth = FALSE,
+        rowCallback = JS(
+          "function(row, data) {
+            var refpRaw = data[4];
+            var curpRaw = data[5];
+            var refp = Number(refpRaw);
+            var curp = Number(curpRaw);
+            var hasRefp = refpRaw !== null && refpRaw !== '' && refpRaw !== 'NA' && isFinite(refp);
+            var hasCurp = curpRaw !== null && curpRaw !== '' && curpRaw !== 'NA' && isFinite(curp);
+            $(row).removeClass('refp-above-curp refp-below-curp');
+            if (!hasRefp || !hasCurp || refp === curp) return;
+            $(row).addClass(refp > curp ? 'refp-above-curp' : 'refp-below-curp');
+          }"
+        ),
         columnDefs = list(
           list(
             targets = 0,
             render = JS(
               "function(data, type, row, meta) {
                 if (type !== 'display') return data;
-                var current = String(data || 'NA');
-                var opts = ['Tier1', 'Tier2','Tier3', 'NA'];
+                var current = String(data || 'zNA');
+                var opts = ['Tier1', 'Tier2','Tier3', 'zNA'];
                 var html = '<select class=\"bank-select\">';
                 for (var i = 0; i < opts.length; i++) {
                   var selected = opts[i] === current ? ' selected' : '';
@@ -502,21 +595,34 @@ server <- function(input, output, session) {
             )
           ),
           list(
-            targets = 1,
+            targets = 2,
             width = "56px",
             render = JS(
               "function(data, type, row, meta) {
                 if (type !== 'display') return data;
                 var value = Number(data);
                 if (!isFinite(value)) value = 0;
-                 return '<input class=\"ref-input\" type=\"number\" ' +
+                 return '<input class=\"IWgt-input\" type=\"text\" inputmode=\"decimal\" ' +
                          'style=\"width:40px;padding:2px;\" ' +
                          'value=\"' + value + '\">';
               }"
             )
           ),
           list(
-            targets = c(3, 4, 5, 6, 7, 8),
+            targets = 4,
+            width = "70px",
+            render = JS(
+              "function(data, type, row, meta) {
+                if (type !== 'display') return data;
+                var value = (data === null || data === '' || data === 'NA') ? NaN : Number(data);
+                var display = isFinite(value) ? value.toFixed(1) : '';
+                return '<input class=\"refp-input\" type=\"text\" inputmode=\"decimal\" ' +
+                       'style=\"width:60px;padding:2px;\" value=\"' + display + '\">';
+              }"
+            )
+          ),
+          list(
+            targets = c(3, 5, 6, 7, 8),
             render = JS("$.fn.dataTable.render.number(',', '.', 2)")
           )
         )
@@ -531,8 +637,8 @@ server <- function(input, output, session) {
     sym <- toupper(trimws(e$symbol))
     bank <- as.character(e$value)
 
-    if (!bank %in% c("Tier1", "Tier2","Tier3", "NA")) {
-      bank <- "NA"
+    if (!bank %in% c("Tier1", "Tier2","Tier3", "zNA")) {
+      bank <- "zNA"
     }
 
     rv$results <- normalize_results(rv$results)
@@ -544,60 +650,37 @@ server <- function(input, output, session) {
     write.csv(rv$results, file_path, row.names = FALSE)
   })
 
-  observeEvent(input$table_ref_change, {
+  observeEvent(input$table_iwgt_change, {
     
-    e <- input$table_ref_change
+    e <- input$table_iwgt_change
     sym <- toupper(trimws(e$symbol))
-    ref <- as.numeric(e$value)
+    iwgt <- as.numeric(e$value)
 
-    if (is.na(ref)) {
-      ref <- 0
+    if (is.na(iwgt)) {
+      iwgt <- 0
     }
 
     rv$results <- normalize_results(rv$results)
     idx <- which(toupper(trimws(rv$results$Symbol)) == sym)
     if (length(idx) == 0) return()
 
-    rv$results$Ref[[idx[[1]]]] <- ref
+    rv$results$IWgt[[idx[[1]]]] <- iwgt
     rv$results <- normalize_results(rv$results)
     write.csv(rv$results, file_path, row.names = FALSE)
   })
 
-  # -------------------------
-  # Edit handler
-  # -------------------------
-  
-  observeEvent(input$table_cell_edit, {
-    
-    e <- input$table_cell_edit
-    i <- get_table_row(e$row)
-    j <- e$col
-    
-    if (j!=6) return()
-    
-    v <- as.numeric(e$value)
-    if (is.na(v)) return()
-    
-    v <- max(0, min(1, round(v / 0.1) * 0.1))
-    
-    rv$results$Frac1[i] <- v
-    rv$results$Frac2[i] <- 1 - v
-    
-    rv$results$Risk[i] <-
-      v * rv$results$VaR_05[i] +
-      (1 - v) * rv$results$BigDrop[i]
-    
-    rv$results$LastMod[i] <- format(Sys.time(), "%Y-%m-%d")
+  observeEvent(input$table_refp_change, {
+    e <- input$table_refp_change
+    sym <- toupper(trimws(e$symbol))
+    refp <- suppressWarnings(as.numeric(e$value))
+
     rv$results <- normalize_results(rv$results)
-    
+    idx <- which(toupper(trimws(rv$results$Symbol)) == sym)
+    if (length(idx) == 0) return()
+
+    rv$results$RefP[[idx[[1]]]] <- if (is.na(refp)) NA_real_ else round(refp, 1)
+    rv$results <- normalize_results(rv$results)
     write.csv(rv$results, file_path, row.names = FALSE)
-    session$sendCustomMessage(
-      "updateRiskTableRow",
-      list(
-        symbol = rv$results$Symbol[[i]],
-        rowData = table_row_data(rv$results, i)
-      )
-    )
   })
   
   observeEvent(input$table_rows_selected, {
@@ -663,4 +746,3 @@ shinyApp(ui, server)
 
 
 #shiny::runApp("InteractiveWeb_AutoTimeSeriesGrab_Note_v2.1.R")
-

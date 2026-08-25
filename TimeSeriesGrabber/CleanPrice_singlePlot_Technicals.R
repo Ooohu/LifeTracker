@@ -35,7 +35,9 @@ get_data <- function(symbol, from) {
 
   clean <- tryCatch(clean[order(index(clean))], error = function(e) price)
 
-  list(price = price, clean = clean)
+  # Ensure the latest price is included
+
+  list(price = na.omit(price), clean = na.omit(clean))
 }
 
 sanitize_days <- function(value, default) {
@@ -106,7 +108,7 @@ plot_clean_price <- function(symbol, from, short_ema_days, long_ema_days, rsi_da
   price <- d$price
   short_ema_days <- sanitize_days(short_ema_days, 15)
   long_ema_days <- sanitize_days(long_ema_days, 20)
-  rsi_days <- sanitize_days(rsi_days, 15)
+  rsi_days <- sanitize_days(rsi_days, 21)
   ma20 <- SMA(clean, n = 20)
   ma50 <- SMA(clean, n = 50)
   short_ema <- get_ema(price, short_ema_days)
@@ -528,8 +530,8 @@ ui <- fluidPage(
       div(
         class = "parameter-row",
         div(class = "symbol-row", textInput("symbol_top", NULL, "SPY", placeholder = "Symbol")),
-        numericInput("short_ema_days", "short-EMA Days", value = 6, min = 1, step = 1, width = "95px"),
-        numericInput("long_ema_days", "long-EMA Days", value = 26, min = 1, step = 1, width = "95px"),
+        numericInput("short_ema_days", "sEMA-dd", value = 6, min = 1, step = 1, width = "95px"),
+        numericInput("long_ema_days", "lEMA-dd", value = 26, min = 1, step = 1, width = "95px"),
         numericInput("ma20_weight", "MA20 Weight", value = 0.25, min = 0, max = 1, step = 0.05),
         numericInput("strategy_scale", "Scale", value = 1.7, min = 0, max = 10, step = 0.1)
       ),
@@ -557,7 +559,7 @@ ui <- fluidPage(
       class = "plot-header",
       div(
         class = "parameter-row",
-        numericInput("rsi_days", "RSI Days", value = 13, min = 1, step = 1),
+        numericInput("rsi_days", "RSI-dd", value = 21, min = 1, step = 1),
         numericInput("overbought", "OverBought", value = 60, min = 0, max = 100, step = 1),
         numericInput("oversold", "OverSold", value = 40, min = 0, max = 100, step = 1)
       )
