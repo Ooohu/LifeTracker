@@ -4,7 +4,8 @@
 	[o] Add ~~bargain estimation using 52wk high * big drop~~ 
     	Fwgt = IWgt × (52-week high / RefP) / abs(BigDrop × 0.01)
 	[x] Add VIX reference using 20-SMA
-    [x] Add past 5 day average movement.
+    [x] Add past 5 day average movement, ADR5.
+    [x] Add past 5 day average Intraday Range, Vol5. 
     [x] Add one button to update the entire table.
 	[x] Add reference price (default is the current price*big_drop)
 	[x] Add Tier filter

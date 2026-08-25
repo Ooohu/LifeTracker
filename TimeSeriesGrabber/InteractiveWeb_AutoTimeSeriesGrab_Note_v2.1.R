@@ -18,7 +18,9 @@ get_data <- function(symbol, from) {
   if (is.null(data) || NROW(data) < 5) return(NULL)
   
   price <- tryCatch(Cl(data), error = function(e) NULL)
-  if (is.null(price) || NROW(price) < 5) return(NULL)
+  high <- tryCatch(Hi(data), error = function(e) NULL)
+  low <- tryCatch(Lo(data), error = function(e) NULL)
+  if (is.null(price) || is.null(high) || is.null(low) || NROW(price) < 5) return(NULL)
   
   peaks <- tryCatch(
     price[price > lag(price,1) & price > lead(price,1)],
@@ -44,7 +46,9 @@ get_data <- function(symbol, from) {
   
   list(
     price = price,
-    clean = clean
+    clean = clean,
+    high = high,
+    low = low
   )
 }
 
@@ -120,13 +124,13 @@ biggest_drop <- function(clean_price) {
 
 normalize_results <- function(results) {
   
-  cols <- c("Bank", "Symbol", "IWgt", "FWgt", "RefP", "CurP", "VaR_05", "BigDrop", "ADR5", "LastMod")
+  cols <- c("Bank", "Symbol", "IWgt", "FWgt", "RefP", "CurP", "VaR_05", "BigDrop", "ADR5", "Vol5", "LastMod")
   
   if (is.null(results) || nrow(results) == 0) {
     return(data.frame(
       Bank = character(), Symbol = character(), IWgt = numeric(), FWgt = numeric(),
       RefP = numeric(), CurP = numeric(),
-      VaR_05 = numeric(), BigDrop = numeric(), ADR5 = numeric(),
+      VaR_05 = numeric(), BigDrop = numeric(), ADR5 = numeric(), Vol5 = numeric(),
       LastMod = character()
     ))
   }
@@ -152,7 +156,7 @@ normalize_results <- function(results) {
   results$IWgt[is.na(results$IWgt)] <- 0
   results$Symbol <- toupper(trimws(results$Symbol))
   
-  numeric_cols <- c("IWgt", "FWgt", "RefP", "CurP", "VaR_05", "BigDrop", "ADR5")
+  numeric_cols <- c("IWgt", "FWgt", "RefP", "CurP", "VaR_05", "BigDrop", "ADR5", "Vol5")
   results[numeric_cols] <- lapply(results[numeric_cols], as.numeric)
   results$RefP <- round(results$RefP, 1)
   results$LastMod <- as.character(results$LastMod)
@@ -458,6 +462,12 @@ server <- function(input, output, session) {
 
     curp <- tail(close_values, 1)
     adr5 <- 100*mean(tail(diff(close_values) / head(close_values, -1), 5))
+    intraday_ranges <- as.numeric(na.omit((d$high - d$low) / d$low))
+    intraday_ranges <- intraday_ranges[is.finite(intraday_ranges)]
+    if (length(intraday_ranges) < 5) {
+      return(list(ok = FALSE, message = paste("Insufficient intraday-range data for", sym)))
+    }
+    vol5 <- mean(tail(intraday_ranges, 5))
     high_52wk <- max(tail(close_values, 252))
     fwgt <- if (refp == 0 || worst == 0) NA_real_ else iwgt * (high_52wk / refp) / abs(worst * 0.01)
 
@@ -471,6 +481,7 @@ server <- function(input, output, session) {
       VaR_05 = VaR,
       BigDrop = worst,
       ADR5 = adr5,
+      Vol5 = vol5,
       LastMod = format(Sys.time(), "%Y-%m-%d")
     )
 
@@ -555,7 +566,7 @@ server <- function(input, output, session) {
       selection = "single",
       editable = list(
         target = "cell",
-        disable = list(columns = c(0:9))
+        disable = list(columns = c(0:10))
       ),
       rownames = FALSE,
       escape = FALSE,
@@ -622,7 +633,7 @@ server <- function(input, output, session) {
             )
           ),
           list(
-            targets = c(3, 5, 6, 7, 8),
+            targets = c(3, 5, 6, 7, 8, 9),
             render = JS("$.fn.dataTable.render.number(',', '.', 2)")
           )
         )
